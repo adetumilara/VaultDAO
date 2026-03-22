@@ -9,6 +9,7 @@ import { ToastProvider } from './context/ToastContext';
 import { WalletProvider } from './context/WalletContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { OnboardingProvider } from './context/OnboardingProvider';
 import { RealtimeProvider } from './contexts/RealtimeContext';
 import { AppErrorBoundary } from './components/ErrorHandler';
 import { flushOfflineErrorQueue } from './components/ErrorReporting';
@@ -40,9 +41,11 @@ function RootApp() {
           <ToastProvider>
             <WalletProvider>
               <NotificationProvider>
-                <RealtimeProvider>
-                  <AppWithErrorBoundary />
-                </RealtimeProvider>
+                <OnboardingProvider>
+                  <RealtimeProvider>
+                    <AppWithErrorBoundary />
+                  </RealtimeProvider>
+                </OnboardingProvider>
               </NotificationProvider>
             </WalletProvider>
           </ToastProvider>
