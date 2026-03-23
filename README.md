@@ -100,6 +100,29 @@ Open `http://localhost:5173` to view the dashboard.
 
 For detailed setup and deployment instructions, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
+### 3. Backend
+
+The backend is a lightweight support service scaffold for future indexing, notifications, websocket, and keeper work. It does not modify the contract and it is currently protected with local Husky hooks instead of GitHub Actions.
+
+```bash
+# Install root dependencies so Husky is available
+npm install
+
+# Install backend dependencies
+npm --prefix backend install
+
+# Copy backend environment example
+cp backend/.env.example backend/.env
+
+# Start the backend in watch mode
+npm run backend:dev
+```
+
+The backend health endpoints will be available at:
+
+- `GET /health`
+- `GET /api/v1/status`
+
 ### Run Tests
 
 ```bash
@@ -130,9 +153,44 @@ cd contracts/vault && cargo test
 
 # Frontend tests (after setup)
 cd frontend && npm test
+
+# Backend checks
+npm run backend:typecheck
+npm run backend:test
 ```
 
 Read the full guide: [docs/TESTING.md](docs/TESTING.md)
+
+## 🤝 Backend Contributor Setup
+
+If you are contributing to the backend, use this flow before opening a PR:
+
+```bash
+# From the repo root
+npm install
+npm --prefix backend install
+cp backend/.env.example backend/.env
+```
+
+Husky is configured at the repository root for backend quality checks:
+
+- `pre-commit`: runs `lint-staged` on backend files
+- `pre-push`: runs backend typecheck and backend tests
+
+Contributors should run these commands locally while working:
+
+```bash
+npm run backend:dev
+npm run backend:typecheck
+npm run backend:test
+npm run backend:build
+```
+
+If Husky hooks are not active after install, run:
+
+```bash
+npx husky
+```
 
 ---
 
