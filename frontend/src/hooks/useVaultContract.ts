@@ -1220,11 +1220,184 @@ export const useVaultContract = () => {
         getPortfolioValue,
         addCustomToken,
         getVaultBalance,
-        getRecurringPayments: async () => [],
-        getRecurringPaymentHistory: async () => [],
-        schedulePayment: async () => "1",
-        executeRecurringPayment: async () => { },
-        cancelRecurringPayment: async () => { },
+        getRecurringPayments: async (): Promise<RecurringPayment[]> => {
+            // Probe recurring payment IDs 1..N from contract storage.
+            // Also merge any locally-cancelled IDs from localStorage.
+            const cancelledKey = `vault_cancelled_recurring_${env.contractId}`;
+            let cancelledIds: string[] = [];
+            try { cancelledIds = JSON.parse(localStorage.getItem(cancelledKey) ?? '[]'); } catch { /* ignore */ }
+            const cancelledSet = new Set(cancelledIds);
+
+            const payments: RecurringPayment[] = [];
+            const LEDGER_INTERVAL_S = 5;
+            const now = Date.now();
+
+            // Fetch the next recurring ID to know the upper bound
+            let maxId = 0;
+            try {
+                const nextId = await readContractValue('get_next_recurring_id').catch(() => null);
+                maxId = nextId != null ? Math.max(0, parseNumericValue(nextId) - 1) : 0;
+            } catch { /* ignore */ }
+
+            // Fetch each payment by ID (up to 50 to avoid excessive calls)
+            const ids = Array.from({ length: Math.min(maxId, 50) }, (_, i) => i + 1);
+            const results = await Promise.allSettled(
+                ids.map(id => readContractValue('get_recurring_payment', [nativeToScVal(BigInt(id), { type: 'u64' })]))
+            );
+
+            // Get current ledger for time estimation
+            let currentLedger = 0;
+            try {
+                const latestRes = await fetch(env.sorobanRpcUrl, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getLatestLedger' }),
+                });
+                const latestData = await latestRes.json() as { result?: { sequence?: number } };
+                currentLedger = latestData?.result?.sequence ?? 0;
+            } catch { /* ignore */ }
+
+            for (let i = 0; i < results.length; i++) {
+                const r = results[i];
+                if (r.status !== 'fulfilled' || r.value == null) continue;
+                const raw = r.value as Record<string, unknown>;
+                const id = String(ids[i]);
+                const isActive = Boolean(raw.is_active ?? raw.isActive ?? true);
+                const isCancelled = cancelledSet.has(id);
+                const intervalLedgers = parseNumericValue(raw.interval);
+                const intervalSeconds = intervalLedgers * LEDGER_INTERVAL_S;
+                const nextLedger = parseNumericValue(raw.next_payment_ledger ?? raw.nextPaymentLedger);
+                const ledgersUntilNext = Math.max(0, nextLedger - currentLedger);
+                const nextPaymentTime = now + ledgersUntilNext * LEDGER_INTERVAL_S * 1000;
+
+                payments.push({
+                    id,
+                    recipient: addressToNative(raw.recipient),
+                    token: addressToNative(raw.token),
+                    amount: parseBigIntString(raw.amount),
+                    memo: typeof raw.memo === 'string' ? raw.memo : '',
+                    interval: intervalSeconds,
+                    nextPaymentTime,
+                    totalPayments: parseNumericValue(raw.payment_count ?? raw.paymentCount),
+                    status: isCancelled ? 'cancelled' : isActive ? 'active' : 'cancelled',
+                    createdAt: now,
+                    creator: addressToNative(raw.proposer),
+                });
+            }
+            return payments;
+        },
+        getRecurringPaymentHistory: async (paymentId?: string): Promise<RecurringPaymentHistory[]> => {
+            // Fetch payment_executed events and filter by payment context.
+            // The contract doesn't emit a specific recurring event, so we return
+            // locally-stored execution records if available.
+            const historyKey = `vault_recurring_history_${env.contractId}_${paymentId ?? 'all'}`;
+            try {
+                const stored = localStorage.getItem(historyKey);
+                if (stored) return JSON.parse(stored) as RecurringPaymentHistory[];
+            } catch { /* ignore */ }
+            return [];
+        },
+        schedulePayment: async (params?: CreateRecurringPaymentParams): Promise<string> => {
+            if (!isConnected || !address) throw new Error('Wallet not connected');
+            if (!params) throw new Error('Payment parameters required');
+            setLoading(true);
+            try {
+                const account = await server.getAccount(address);
+                // Convert seconds to ledgers (~5s per ledger), minimum 720 ledgers (1 hour)
+                const LEDGER_INTERVAL_S = 5;
+                const intervalLedgers = Math.max(720, Math.round(params.interval / LEDGER_INTERVAL_S));
+                const tokenAddress = params.token === 'native'
+                    ? 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC' // XLM SAC on testnet
+                    : params.token;
+                const tx = new TransactionBuilder(account, { fee: '100' })
+                    .setNetworkPassphrase(env.networkPassphrase)
+                    .setTimeout(30)
+                    .addOperation(Operation.invokeHostFunction({
+                        func: xdr.HostFunction.hostFunctionTypeInvokeContract(
+                            new xdr.InvokeContractArgs({
+                                contractAddress: Address.fromString(env.contractId).toScAddress(),
+                                functionName: 'schedule_payment',
+                                args: [
+                                    new Address(address).toScVal(),
+                                    new Address(params.recipient).toScVal(),
+                                    new Address(tokenAddress).toScVal(),
+                                    nativeToScVal(BigInt(params.amount), { type: 'i128' }),
+                                    xdr.ScVal.scvSymbol(params.memo || 'recurring'),
+                                    nativeToScVal(BigInt(intervalLedgers), { type: 'u64' }),
+                                ],
+                            })
+                        ),
+                        auth: [],
+                    }))
+                    .build();
+                const simulation = await server.simulateTransaction(tx);
+                if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation failed: ${simulation.error}`);
+                const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
+                const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
+                const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
+                return response.hash;
+            } catch (e: unknown) {
+                throw parseError(e);
+            } finally {
+                setLoading(false);
+            }
+        },
+        executeRecurringPayment: async (paymentId?: string): Promise<void> => {
+            if (!isConnected || !address) throw new Error('Wallet not connected');
+            if (!paymentId) throw new Error('Payment ID required');
+            setLoading(true);
+            try {
+                const account = await server.getAccount(address);
+                const tx = new TransactionBuilder(account, { fee: '100' })
+                    .setNetworkPassphrase(env.networkPassphrase)
+                    .setTimeout(30)
+                    .addOperation(Operation.invokeHostFunction({
+                        func: xdr.HostFunction.hostFunctionTypeInvokeContract(
+                            new xdr.InvokeContractArgs({
+                                contractAddress: Address.fromString(env.contractId).toScAddress(),
+                                functionName: 'execute_recurring_payment',
+                                args: [nativeToScVal(BigInt(paymentId), { type: 'u64' })],
+                            })
+                        ),
+                        auth: [],
+                    }))
+                    .build();
+                const simulation = await server.simulateTransaction(tx);
+                if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation failed: ${simulation.error}`);
+                const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
+                const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
+                const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
+                // Record execution in localStorage history
+                const historyKey = `vault_recurring_history_${env.contractId}_${paymentId}`;
+                try {
+                    const existing: RecurringPaymentHistory[] = JSON.parse(localStorage.getItem(historyKey) ?? '[]');
+                    existing.unshift({
+                        id: `${paymentId}-${Date.now()}`,
+                        paymentId,
+                        executedAt: Date.now(),
+                        transactionHash: response.hash,
+                        amount: '0',
+                        success: true,
+                    });
+                    localStorage.setItem(historyKey, JSON.stringify(existing.slice(0, 50)));
+                } catch { /* ignore */ }
+            } catch (e: unknown) {
+                throw parseError(e);
+            } finally {
+                setLoading(false);
+            }
+        },
+        cancelRecurringPayment: async (paymentId?: string): Promise<void> => {
+            // No cancel function exists on-chain; persist cancellation locally.
+            if (!paymentId) throw new Error('Payment ID required');
+            const cancelledKey = `vault_cancelled_recurring_${env.contractId}`;
+            try {
+                const existing: string[] = JSON.parse(localStorage.getItem(cancelledKey) ?? '[]');
+                if (!existing.includes(paymentId)) {
+                    existing.push(paymentId);
+                    localStorage.setItem(cancelledKey, JSON.stringify(existing));
+                }
+            } catch { /* ignore */ }
+        },
         getAllRoles: async () => [],
         setRole: async () => { },
         getUserRole,

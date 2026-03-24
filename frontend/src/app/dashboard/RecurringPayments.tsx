@@ -370,7 +370,7 @@ const RecurringPayments: React.FC = () => {
   const handleCreatePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const txHash = await schedulePayment?.();
+      const txHash = await schedulePayment?.(formData);
       notify('new_proposal', 'Recurring payment created successfully!', 'success');
       setIsCreateModalOpen(false);
       setFormData({
@@ -392,10 +392,9 @@ const RecurringPayments: React.FC = () => {
   const handleExecutePayment = async (payment: RecurringPayment) => {
     setExecutingPaymentId(payment.id);
     try {
-      const txHash = await executeRecurringPayment?.();
+      await executeRecurringPayment?.(payment.id);
       notify('proposal_executed', 'Payment executed successfully!', 'success');
       await fetchPayments();
-      console.log('Transaction hash:', txHash);
     } catch (error) {
       console.error('Failed to execute payment:', error);
       notify('config_updated', error instanceof Error ? error.message : 'Failed to execute payment', 'error');
@@ -408,12 +407,11 @@ const RecurringPayments: React.FC = () => {
   const handleCancelPayment = async () => {
     if (!selectedPayment) return;
     try {
-      const txHash = await cancelRecurringPayment?.();
+      await cancelRecurringPayment?.(selectedPayment.id);
       notify('proposal_rejected', 'Recurring payment cancelled successfully', 'success');
       setIsCancelModalOpen(false);
       setSelectedPayment(null);
       await fetchPayments();
-      console.log('Transaction hash:', txHash);
     } catch (error) {
       console.error('Failed to cancel payment:', error);
       notify('config_updated', error instanceof Error ? error.message : 'Failed to cancel payment', 'error');
@@ -426,7 +424,7 @@ const RecurringPayments: React.FC = () => {
     setIsHistoryModalOpen(true);
     setHistoryLoading(true);
     try {
-      const history = await getRecurringPaymentHistory?.() ?? [];
+      const history = await getRecurringPaymentHistory?.(payment.id) ?? [];
       setPaymentHistory(history);
     } catch (error) {
       console.error('Failed to fetch payment history:', error);
