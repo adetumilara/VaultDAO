@@ -9,7 +9,7 @@ import {
     scValToNative
 } from 'stellar-sdk';
 import { useWallet } from './useWallet';
-import { parseError } from '../utils/errorParser';
+import { parseError, type VaultError } from '../utils/errorParser';
 import { env } from '../config/env';
 import { withRetry } from '../utils/retryUtils';
 import type { VaultActivity, GetVaultEventsResult, VaultEventType } from '../types/activity';
@@ -232,13 +232,16 @@ export const useVaultContract = () => {
      */
     const assertReady = useCallback((): string => {
         if (!isConnected || !address) {
-            throw new Error('Please connect your wallet before performing this action.');
+            const err: VaultError = { code: 'WALLET_NOT_CONNECTED', message: 'Please connect your wallet before performing this action.' };
+            throw err;
         }
         if (network && network.toUpperCase() !== env.stellarNetwork.toUpperCase()) {
-            throw new Error(`Wrong network. Please switch your wallet to ${env.stellarNetwork}.`);
+            const err: VaultError = { code: 'NETWORK_MISMATCH', message: `Wrong network. Please switch your wallet to ${env.stellarNetwork}.` };
+            throw err;
         }
         if (!env.contractId) {
-            throw new Error('Contract is not configured. Check your environment settings.');
+            const err: VaultError = { code: 'CONTRACT_NOT_CONFIGURED', message: 'Contract is not configured. Check your environment settings.' };
+            throw err;
         }
         return address;
     }, [isConnected, address, network]);
@@ -499,7 +502,7 @@ return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute
                 }))
                 .build();
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
             const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
             const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
             const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -534,7 +537,7 @@ return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute
                 }))
                 .build();
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
             const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
             const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
             const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -569,7 +572,7 @@ return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute
                 }))
                 .build();
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
             const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
             const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
             const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -604,7 +607,7 @@ return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute
                 }))
                 .build();
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
             const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
             const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
             const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -637,7 +640,7 @@ return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute
                 }))
                 .build();
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
             const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
             const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
             const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -669,7 +672,7 @@ return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute
                 }))
                 .build();
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
             const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
             const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
             const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -701,7 +704,7 @@ return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute
                 }))
                 .build();
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
             const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
             const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
             const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -738,7 +741,7 @@ return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute
                 }))
                 .build();
             const simulation = await server.simulateTransaction(tx);
-            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+            if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
             const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
             const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
             const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -1450,7 +1453,7 @@ const exportSignatures = useCallback(async (proposalId: number) => {
                     }))
                     .build();
                 const simulation = await server.simulateTransaction(tx);
-                if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation failed: ${simulation.error}`);
+                if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
                 const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
                 const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
                 const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -1482,7 +1485,7 @@ const exportSignatures = useCallback(async (proposalId: number) => {
                     }))
                     .build();
                 const simulation = await server.simulateTransaction(tx);
-                if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation failed: ${simulation.error}`);
+                if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
                 const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
                 const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
                 const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -1554,7 +1557,7 @@ const exportSignatures = useCallback(async (proposalId: number) => {
                     }))
                     .build();
                 const simulation = await server.simulateTransaction(tx);
-                if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+                if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
                 const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
                 const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
                 const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
@@ -1599,7 +1602,7 @@ const exportSignatures = useCallback(async (proposalId: number) => {
                         }))
                         .build();
                     const simulation = await server.simulateTransaction(tx);
-                    if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(`Simulation Failed: ${simulation.error}`);
+                    if (SorobanRpc.Api.isSimulationError(simulation)) throw new Error(simulation.error || "Simulation failed");
                     const preparedTx = SorobanRpc.assembleTransaction(tx, simulation).build();
                     const signedXdr = await signTransaction(preparedTx.toXDR(), { network: env.stellarNetwork });
                     const response = await server.sendTransaction(TransactionBuilder.fromXDR(signedXdr as string, env.networkPassphrase));
