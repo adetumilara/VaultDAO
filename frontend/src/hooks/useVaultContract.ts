@@ -330,109 +330,108 @@ export const useVaultContract = () => {
     const getDashboardStats = useCallback(async () => {
         try {
             return await withRetry(async () => {
-                // Fetch balance, config, and proposals in parallel
-                const [accountInfo, configResult, proposalsResult] = await Promise.allSettled([
-                    server.getAccount(env.contractId) as Promise<unknown>,
-                    readContractValue('get_config').catch(() => null).then(r =>
-                        r ?? readContractValue('get_vault_config').catch(() => null)
-                    ),
-                    // Inline event fetch to avoid forward-reference to getVaultEvents
-                    (async () => {
-                        const latestRes = await fetch(env.sorobanRpcUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getLatestLedger' }),
-                        });
-                        const latestData = await latestRes.json() as { result?: { sequence?: number } };
-                        const latestLedger = latestData?.result?.sequence ?? 0;
-                        const startLedger = Math.max(1, latestLedger - 50000);
-                        const evRes = await fetch(env.sorobanRpcUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                jsonrpc: '2.0', id: 2, method: 'getEvents',
-                                params: {
-                                    startLedger: String(startLedger),
-                                    filters: [{ type: 'contract', contractIds: [env.contractId] }],
-                                    pagination: { limit: 200 },
-                                },
-                            }),
-                        });
-                        const evData = await evRes.json() as { result?: { events?: RawEvent[] } };
-                        return evData.result?.events ?? [];
-                    })(),
-                ]);
+// Fetch balance, config, and proposals in parallel
+const [accountInfo, configResult, proposalsResult] = await Promise.allSettled([
+    server.getAccount(env.contractId) as Promise<unknown>,
+    readContractValue('get_config').catch(() => null).then(r =>
+        r ?? readContractValue('get_vault_config').catch(() => null)),
+    // Inline event fetch to avoid forward-reference to getVaultEvents
+    (async () => {
+        const latestRes = await fetch(env.sorobanRpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getLatestLedger' }),
+        });
+        const latestData = await latestRes.json() as { result?: { sequence?: number } };
+        const latestLedger = latestData?.result?.sequence ?? 0;
+        const startLedger = Math.max(1, latestLedger - 50000);
+        const evRes = await fetch(env.sorobanRpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0', id: 2, method: 'getEvents',
+                params: {
+                    startLedger: String(startLedger),
+                    filters: [{ type: 'contract', contractIds: [env.contractId] }],
+                    pagination: { limit: 200 },
+                },
+            }),
+        });
+        const evData = await evRes.json() as { result?: { events?: RawEvent[] } };
+        return evData.result?.events ?? [];
+    })(),
+]);
 
-                // --- Balance ---
-                let balance = '0';
-                if (accountInfo.status === 'fulfilled') {
-                    const info = accountInfo.value as { balances?: StellarBalance[] };
-                    const native = info.balances?.find(b => b.asset_type === 'native');
-                    if (native) balance = parseFloat(native.balance).toLocaleString();
-                }
+// --- Balance ---
+let balance = '0';
+if (accountInfo.status === 'fulfilled') {
+    const info = accountInfo.value as { balances?: StellarBalance[] };
+    const native = info.balances?.find(b => b.asset_type === 'native');
+    if (native) balance = parseFloat(native.balance).toLocaleString();
+}
 
-                // --- Signer / threshold from config ---
-                let activeSigners = 0;
-                let threshold = '0/0';
-                if (configResult.status === 'fulfilled' && configResult.value) {
-                    const cfg = configResult.value as Record<string, unknown>;
-                    const signers = parseSignerAddresses(cfg.signers);
-                    const t = parseNumericValue(cfg.threshold);
-                    activeSigners = signers.length;
-                    threshold = `${t}/${activeSigners}`;
-                }
+// --- Signer / threshold from config ---
+let activeSigners = 0;
+let threshold = '0/0';
+if (configResult.status === 'fulfilled' && configResult.value) {
+    const cfg = configResult.value as Record<string, unknown>;
+    const signers = parseSignerAddresses(cfg.signers);
+    const t = parseNumericValue(cfg.threshold);
+    activeSigners = signers.length;
+    threshold = `${t}/${activeSigners}`;
+}
 
-                // --- Proposal counts from events ---
-                let totalProposals = 0;
-                let pendingApprovals = 0;
-                let readyToExecute = 0;
-                if (proposalsResult.status === 'fulfilled') {
-                    const events: RawEvent[] = proposalsResult.value;
-                    const proposalMap = new Map<string, { status: string; approvals: number; threshold: number }>();
-                    for (const ev of events) {
-                        const topic0 = ev.topic?.[0];
-                        if (!topic0) continue;
-                        const evType = getEventTypeFromTopic(topic0);
-                        const id = String(ev.id.split('-')[0] ?? ev.id);
-                        if (evType === 'proposal_created') {
-                            proposalMap.set(id, { status: 'Pending', approvals: 0, threshold: 3 });
-                        }
-                    }
-                    for (const ev of events) {
-                        const topic0 = ev.topic?.[0];
-                        if (!topic0) continue;
-                        const evType = getEventTypeFromTopic(topic0);
-                        const id = String(ev.id.split('-')[0] ?? ev.id);
-                        const p = proposalMap.get(id);
-                        if (!p) continue;
-                        if (evType === 'proposal_approved') {
-                            const valueXdr = ev.value?.xdr;
-                            const { details } = valueXdr ? parseEventValue(valueXdr, evType) : { details: {} as Record<string, unknown> };
-                            const d = details as Record<string, unknown>;
-                            const approvals = Number(d.approval_count ?? p.approvals + 1);
-                            const t = Number(d.threshold ?? p.threshold);
-                            proposalMap.set(id, { ...p, approvals, threshold: t, status: approvals >= t ? 'Approved' : 'Pending' });
-                        } else if (evType === 'proposal_rejected') {
-                            proposalMap.set(id, { ...p, status: 'Rejected' });
-                        } else if (evType === 'proposal_executed') {
-                            proposalMap.set(id, { ...p, status: 'Executed' });
-                        } else if (evType === 'proposal_ready') {
-                            proposalMap.set(id, { ...p, status: 'Approved' });
-                        }
-                    }
-                    const proposals = Array.from(proposalMap.values());
-                    totalProposals = proposals.filter(p => p.status !== 'Executed' && p.status !== 'Rejected').length;
-                    pendingApprovals = proposals.filter(p => p.status === 'Pending').length;
-                    readyToExecute = proposals.filter(p => p.status === 'Approved').length;
-                }
-
-                return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute, activeSigners, threshold };
-            }, { maxAttempts: 3, initialDelayMs: 1000 });
-        } catch (e) {
-            console.error("Failed to fetch dashboard stats:", e);
-            return { totalBalance: '0', totalProposals: 0, pendingApprovals: 0, readyToExecute: 0, activeSigners: 0, threshold: '0/0' };
+// --- Proposal counts from events ---
+let totalProposals = 0;
+let pendingApprovals = 0;
+let readyToExecute = 0;
+if (proposalsResult.status === 'fulfilled') {
+    const events: RawEvent[] = proposalsResult.value;
+    const proposalMap = new Map<string, { status: string; approvals: number; threshold: number }>();
+    for (const ev of events) {
+        const topic0 = ev.topic?.[0];
+        if (!topic0) continue;
+        const evType = getEventTypeFromTopic(topic0);
+        const id = String(ev.id.split('-')[0] ?? ev.id);
+        if (evType === 'proposal_created') {
+            proposalMap.set(id, { status: 'Pending', approvals: 0, threshold: 3 });
         }
-    }, [readContractValue]);
+    }
+    for (const ev of events) {
+        const topic0 = ev.topic?.[0];
+        if (!topic0) continue;
+        const evType = getEventTypeFromTopic(topic0);
+        const id = String(ev.id.split('-')[0] ?? ev.id);
+        const p = proposalMap.get(id);
+        if (!p) continue;
+        if (evType === 'proposal_approved') {
+            const valueXdr = ev.value?.xdr;
+            const { details } = valueXdr ? parseEventValue(valueXdr, evType) : { details: {} as Record<string, unknown> };
+            const d = details as Record<string, unknown>;
+            const approvals = Number(d.approval_count ?? p.approvals + 1);
+            const t = Number(d.threshold ?? p.threshold);
+            proposalMap.set(id, { ...p, approvals, threshold: t, status: approvals >= t ? 'Approved' : 'Pending' });
+        } else if (evType === 'proposal_rejected') {
+            proposalMap.set(id, { ...p, status: 'Rejected' });
+        } else if (evType === 'proposal_executed') {
+            proposalMap.set(id, { ...p, status: 'Executed' });
+        } else if (evType === 'proposal_ready') {
+            proposalMap.set(id, { ...p, status: 'Approved' });
+        }
+    }
+    const proposals = Array.from(proposalMap.values());
+    totalProposals = proposals.filter(p => p.status !== 'Executed' && p.status !== 'Rejected').length;
+    pendingApprovals = proposals.filter(p => p.status === 'Pending').length;
+    readyToExecute = proposals.filter(p => p.status === 'Approved').length;
+}
+
+return { totalBalance: balance, totalProposals, pendingApprovals, readyToExecute, activeSigners, threshold };
+}, { maxAttempts: 3, initialDelayMs: 1000 });
+} catch (e) {
+    console.error("Failed to fetch dashboard stats:", e);
+    return { totalBalance: '0', totalProposals: 0, pendingApprovals: 0, readyToExecute: 0, activeSigners: 0, threshold: '0/0' };
+}
+}, [readContractValue]);
 
     const getVaultConfig = useCallback(async (): Promise<VaultConfig> => {
         const [configRawPrimary, configRawLegacy, userRole, isSigner] = await Promise.all([
@@ -907,100 +906,99 @@ export const useVaultContract = () => {
 
     const getProposalSignatures = useCallback(async (proposalId: number) => {
         try {
-            // Get the full signer list from vault config
-            const [configPrimary, configLegacy] = await Promise.all([
-                readContractValue('get_config').catch(() => null),
-                readContractValue('get_vault_config').catch(() => null),
-            ]);
-            const configRaw = configPrimary ?? configLegacy;
-            const configObject = (configRaw && typeof configRaw === 'object') ? configRaw as Record<string, unknown> : {};
-            const allSigners = parseSignerAddresses(configObject.signers);
+// Get the full signer list from vault config
+const [configPrimary, configLegacy] = await Promise.all([
+    readContractValue('get_config').catch(() => null),
+    readContractValue('get_vault_config').catch(() => null),
+]);
+const configRaw = configPrimary ?? configLegacy;
+const configObject = (configRaw && typeof configRaw === 'object') ? configRaw as Record<string, unknown> : {};
+const allSigners = parseSignerAddresses(configObject.signers);
 
-            // Fetch events to find approvals for this specific proposal
-            const latestRes = await fetch(env.sorobanRpcUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getLatestLedger' }),
-            });
-            const latestData = await latestRes.json() as { result?: { sequence?: number } };
-            const latestLedger = latestData?.result?.sequence ?? 0;
-            const startLedger = Math.max(1, latestLedger - 50000);
+// Fetch events to find approvals for this specific proposal
+const latestRes = await fetch(env.sorobanRpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getLatestLedger' }),
+});
+const latestData = await latestRes.json() as { result?: { sequence?: number } };
+const latestLedger = latestData?.result?.sequence ?? 0;
+const startLedger = Math.max(1, latestLedger - 50000);
+const evRes = await fetch(env.sorobanRpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        jsonrpc: '2.0', id: 2, method: 'getEvents',
+        params: {
+            startLedger: String(startLedger),
+            filters: [{ type: 'contract', contractIds: [env.contractId] }],
+            pagination: { limit: 200 },
+        },
+    }),
+});
+const evData = await evRes.json() as { result?: { events?: RawEvent[] } };
+const events: RawEvent[] = evData.result?.events ?? [];
 
-            const evRes = await fetch(env.sorobanRpcUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jsonrpc: '2.0', id: 2, method: 'getEvents',
-                    params: {
-                        startLedger: String(startLedger),
-                        filters: [{ type: 'contract', contractIds: [env.contractId] }],
-                        pagination: { limit: 200 },
-                    },
-                }),
-            });
-            const evData = await evRes.json() as { result?: { events?: RawEvent[] } };
-            const events: RawEvent[] = evData.result?.events ?? [];
+// Collect approvals for this proposal id
+const approvalMap = new Map<string, string>(); // address -> timestamp
+const proposalIdStr = String(proposalId);
+for (const ev of events) {
+    const topic0 = ev.topic?.[0];
+    if (!topic0) continue;
+    const evType = getEventTypeFromTopic(topic0);
+    if (evType !== 'proposal_approved') continue;
+    const evId = String(ev.id.split('-')[0] ?? ev.id);
+    if (evId !== proposalIdStr) continue;
+    const valueXdr = ev.value?.xdr;
+    if (!valueXdr) continue;
+    const { actor } = parseEventValue(valueXdr, evType);
+    if (actor) approvalMap.set(actor, ev.ledgerClosedAt ?? new Date().toISOString());
+}
 
-            // Collect approvals for this proposal id
-            const approvalMap = new Map<string, string>(); // address -> timestamp
-            const proposalIdStr = String(proposalId);
-            for (const ev of events) {
-                const topic0 = ev.topic?.[0];
-                if (!topic0) continue;
-                const evType = getEventTypeFromTopic(topic0);
-                if (evType !== 'proposal_approved') continue;
-                const evId = String(ev.id.split('-')[0] ?? ev.id);
-                if (evId !== proposalIdStr) continue;
-                const valueXdr = ev.value?.xdr;
-                if (!valueXdr) continue;
-                const { actor } = parseEventValue(valueXdr, evType);
-                if (actor) approvalMap.set(actor, ev.ledgerClosedAt ?? new Date().toISOString());
-            }
+// Build signer list: known signers first, then any approvers not in config
+const signerSet = new Set(allSigners);
+for (const addr of approvalMap.keys()) {
+    if (!signerSet.has(addr)) allSigners.push(addr);
+}
 
-            // Build signer list: known signers first, then any approvers not in config
-            const signerSet = new Set(allSigners);
-            for (const addr of approvalMap.keys()) {
-                if (!signerSet.has(addr)) allSigners.push(addr);
-            }
+return allSigners.map(addr => ({
+    address: addr,
+    signed: approvalMap.has(addr),
+    timestamp: approvalMap.get(addr),
+}));
+} catch (e) {
+    console.error('getProposalSignatures failed:', e);
+    return [];
+}
+}, [readContractValue]);
 
-            return allSigners.map(addr => ({
-                address: addr,
-                signed: approvalMap.has(addr),
-                timestamp: approvalMap.get(addr),
-            }));
-        } catch (e) {
-            console.error('getProposalSignatures failed:', e);
-            return [];
-        }
-    }, [readContractValue]);
+const remindSigner = useCallback(async (_proposalId: number, signerAddress: string) => {
+    const url = `${window.location.origin}/dashboard/proposals?signer=${encodeURIComponent(signerAddress)}`;
+    try {
+        await navigator.clipboard.writeText(url);
+    } catch {
+        // fallback: no-op if clipboard unavailable
+    }
+}, []);
 
-    const remindSigner = useCallback(async (_proposalId: number, signerAddress: string) => {
-        // Copy a deep-link to clipboard so the user can share it with the signer
-        const url = `${window.location.origin}/dashboard/proposals?signer=${encodeURIComponent(signerAddress)}`;
-        try {
-            await navigator.clipboard.writeText(url);
-        } catch {
-            // fallback: no-op if clipboard unavailable
-        }
-    }, []);
+const exportSignatures = useCallback(async (proposalId: number) => {
+    try {
+        const sigs = await getProposalSignatures(proposalId);
+        const blob = new Blob(
+            [JSON.stringify({ proposalId, exportedAt: new Date().toISOString(), signatures: sigs }, null, 2)],
+            { type: 'application/json' }
+        );
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `proposal-${proposalId}-signatures.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error('exportSignatures failed:', e);
+    }
+}, [getProposalSignatures]);
 
-    const exportSignatures = useCallback(async (proposalId: number) => {
-        try {
-            const sigs = await getProposalSignatures(proposalId);
-            const blob = new Blob(
-                [JSON.stringify({ proposalId, exportedAt: new Date().toISOString(), signatures: sigs }, null, 2)],
-                { type: 'application/json' }
-            );
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `proposal-${proposalId}-signatures.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-        } catch (e) {
-            console.error('exportSignatures failed:', e);
-        }
-    }, [getProposalSignatures]);
 
     const getProposalComments = useCallback(async (proposalId: string): Promise<Comment[]> => {
         return proposalComments[proposalId] ?? [];
