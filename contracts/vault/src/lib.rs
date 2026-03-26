@@ -3605,7 +3605,7 @@ impl VaultDAO {
     /// ```
     pub fn get_portfolio_valuation(env: Env, assets: Vec<Address>) -> Result<i128, VaultError> {
         // Empty asset list is valid and returns 0
-        if assets.len() == 0 {
+        if assets.is_empty() {
             return Ok(0);
         }
 
