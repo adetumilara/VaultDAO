@@ -11,6 +11,31 @@ import {
   ProposalActivityType,
 } from "./types.js";
 
+/** Maximum page size for {@link ProposalActivityAggregator.getAllProposals}. */
+export const GET_ALL_PROPOSALS_MAX_LIMIT = 100;
+
+/**
+ * Pagination input for {@link ProposalActivityAggregator.getAllProposals}.
+ */
+export interface GetAllProposalsParams {
+  offset?: number;
+  limit?: number;
+}
+
+/**
+ * Paginated result: items are sorted by latest activity (newest first).
+ * `total` is the full number of proposals tracked, before slicing.
+ */
+export interface GetAllProposalsResult {
+  items: Array<{
+    proposalId: string;
+    latestActivity: ProposalActivityRecord;
+  }>;
+  total: number;
+  offset: number;
+  limit: number;
+}
+
 /**
  * Statistics for proposal activity over a time period.
  */
@@ -214,9 +239,10 @@ export class ProposalActivityAggregator {
   }
 
   /**
-   * Gets all proposals with their latest status.
+   * Returns all proposals sorted by latest activity (newest first), without pagination.
+   * Used internally after sorting; prefer {@link getAllProposals} for API surfaces.
    */
-  public getAllProposals(): Array<{
+  private getAllProposalsSorted(): Array<{
     proposalId: string;
     latestActivity: ProposalActivityRecord;
   }> {
@@ -236,6 +262,27 @@ export class ProposalActivityAggregator {
   }
 
   /**
+   * Gets proposals with their latest status, sorted by latest activity (newest first),
+   * then paginated. `total` is the unfiltered proposal count.
+   */
+  public getAllProposals(params?: GetAllProposalsParams): GetAllProposalsResult {
+    const sorted = this.getAllProposalsSorted();
+    const total = sorted.length;
+
+    const offset = Math.max(0, Math.floor(params?.offset ?? 0));
+
+    let limit = params?.limit ?? GET_ALL_PROPOSALS_MAX_LIMIT;
+    if (!Number.isFinite(limit) || limit < 1) {
+      limit = 1;
+    }
+    limit = Math.min(Math.floor(limit), GET_ALL_PROPOSALS_MAX_LIMIT);
+
+    const items = sorted.slice(offset, offset + limit);
+
+    return { items, total, offset, limit };
+  }
+
+  /**
    * Gets proposals by status.
    */
   public getProposalsByStatus(
@@ -244,7 +291,7 @@ export class ProposalActivityAggregator {
     proposalId: string;
     latestActivity: ProposalActivityRecord;
   }> {
-    return this.getAllProposals().filter(
+    return this.getAllProposalsSorted().filter(
       (p) => p.latestActivity.type === status
     );
   }
